@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "WheresMyKappaFapp": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 7157",
+      "launchBrowser": false
+    }
+  }
+}
