@@ -34,7 +34,7 @@ namespace WheresMyKappaFapp
                 string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
                 var feedback = JsonSerializer.Deserialize<Feedback>(requestBody, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
-                if (feedback == null || string.IsNullOrEmpty(feedback.FeedbackArea) || string.IsNullOrEmpty(feedback.FeedbackText))
+                if (feedback == null || string.IsNullOrEmpty(feedback.FeedbackArea) || string.IsNullOrEmpty(feedback.FeedbackText) || string.IsNullOrEmpty(feedback.FeedbackType))
                 {
                     return new BadRequestObjectResult("Invalid feedback data.");
                 }

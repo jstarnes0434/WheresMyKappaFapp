@@ -9,6 +9,7 @@ namespace WheresMyKappaFapp.Models
     public class Feedback
     {
         public string id { get; set; }  // CosmosDB requires an Id field
+        public string FeedbackType { get; set; }
         public string FeedbackArea { get; set; }
         public string FeedbackText { get; set; }
     }
