@@ -19,9 +19,52 @@ namespace WheresMyKappaFapp
 
         public ManageEvents(ILogger<ManageEvents> logger)
         {
-            _logger = logger;
-            _cosmosClient = new CosmosClient(Environment.GetEnvironmentVariable("CosmosDBConnection"));
-            _container = _cosmosClient.GetContainer("CalendarDB", "Events");
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            var connectionString = Environment.GetEnvironmentVariable("CosmosDBConnection");
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                throw new InvalidOperationException("CosmosDBConnection environment variable is not set.");
+            }
+
+            _cosmosClient = new CosmosClient(connectionString) ?? throw new InvalidOperationException("Failed to initialize CosmosClient.");
+
+            // Initialize database and container if they don't exist
+            InitializeCosmosResources().GetAwaiter().GetResult();
+            _container = _cosmosClient.GetContainer("FeedbackDB", "CalendarEvents") ?? throw new InvalidOperationException("Failed to access CalendarEvents container.");
+        }
+
+        private async Task InitializeCosmosResources()
+        {
+            try
+            {
+                // Create database if it doesn't exist
+                Database database = await _cosmosClient.CreateDatabaseIfNotExistsAsync("FeedbackDB");
+                _logger.LogInformation("Database 'FeedbackDB' ensured.");
+
+                // Create container if it doesn't exist
+                await database.CreateContainerIfNotExistsAsync(new ContainerProperties
+                {
+                    Id = "CalendarEvents",
+                    PartitionKeyPath = "/id",
+                    IndexingPolicy = new IndexingPolicy
+                    {
+                        IndexingMode = IndexingMode.Consistent,
+                        IncludedPaths = {
+                            new IncludedPath { Path = "/id/?" },
+                            new IncludedPath { Path = "/date/?" },
+                            new IncludedPath { Path = "/title/?" },
+                            new IncludedPath { Path = "/time/?" }
+                        },
+                        ExcludedPaths = { new ExcludedPath { Path = "/*" } }
+                    }
+                }, throughput: 400);
+                _logger.LogInformation("Container 'CalendarEvents' ensured with partition key '/id'.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to initialize Cosmos DB resources: {ex.Message}");
+                throw;
+            }
         }
 
         [Function("ManageEvents")]
@@ -48,8 +91,8 @@ namespace WheresMyKappaFapp
 
                     _logger.LogInformation($"Creating event: {JsonSerializer.Serialize(eventItem)}");
 
-                    // Use 'date' as the partition key
-                    await _container.CreateItemAsync(eventItem, new PartitionKey(eventItem.date));
+                    // Use 'id' as the partition key
+                    await _container.CreateItemAsync(eventItem, new PartitionKey(eventItem.id));
 
                     return new OkObjectResult(new { message = "Event created successfully!", eventId = eventItem.id });
                 }
@@ -70,14 +113,12 @@ namespace WheresMyKappaFapp
 
                     if (!string.IsNullOrEmpty(date))
                     {
-                        // Query for a specific date
                         query = "SELECT * FROM c WHERE c.date = @date";
                         queryDefinition = new QueryDefinition(query)
                             .WithParameter("@date", date);
                     }
                     else
                     {
-                        // Query for a date range
                         query = "SELECT * FROM c WHERE c.date >= @startDate AND c.date <= @endDate";
                         queryDefinition = new QueryDefinition(query)
                             .WithParameter("@startDate", startDate)
@@ -89,10 +130,19 @@ namespace WheresMyKappaFapp
                     var iterator = _container.GetItemQueryIterator<Event>(queryDefinition);
                     var events = new System.Collections.Generic.List<Event>();
 
+                    if (iterator == null)
+                    {
+                        _logger.LogWarning("Query iterator is null. Returning empty result.");
+                        return new OkObjectResult(events);
+                    }
+
                     while (iterator.HasMoreResults)
                     {
                         var response = await iterator.ReadNextAsync();
-                        events.AddRange(response);
+                        if (response != null)
+                        {
+                            events.AddRange(response);
+                        }
                     }
 
                     return new OkObjectResult(events);
@@ -110,13 +160,18 @@ namespace WheresMyKappaFapp
 
                     _logger.LogInformation($"Deleting event with id: {deleteRequest.id}, date: {deleteRequest.date}");
 
-                    // Delete the item using id and partition key (date)
-                    await _container.DeleteItemAsync<Event>(deleteRequest.id, new PartitionKey(deleteRequest.date));
+                    // Use 'id' as the partition key
+                    await _container.DeleteItemAsync<Event>(deleteRequest.id, new PartitionKey(deleteRequest.id));
 
                     return new OkObjectResult(new { message = "Event deleted successfully!" });
                 }
 
                 return new BadRequestObjectResult("Invalid request method.");
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogError($"Cosmos DB resource not found: {ex.Message}");
+                return new NotFoundObjectResult("Database or container not found. Please ensure FeedbackDB and CalendarEvents container exist.");
             }
             catch (Exception ex)
             {
